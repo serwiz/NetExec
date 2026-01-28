@@ -2,7 +2,6 @@ import socket
 import datetime
 
 from collections import defaultdict
-from pyasn1.type.univ import OctetString
 
 
 from nxc.helpers.misc import CATEGORY
@@ -14,8 +13,9 @@ from impacket.ldap.ldapasn1 import AddRequest, ResultCode
 from impacket.ldap import ldaptypes
 from impacket.structure import Structure
 from impacket.dcerpc.v5 import transport, lsat, lsad
-from impacket.dcerpc.v5.dtypes import MAXIMUM_ALLOWED 
+from impacket.dcerpc.v5.dtypes import MAXIMUM_ALLOWED
 from impacket.dcerpc.v5.rpcrt import DCERPCException, RPC_C_AUTHN_GSS_NEGOTIATE, RPC_C_AUTHN_LEVEL_PKT_PRIVACY
+
 
 class DNS_RECORD(Structure):
     """
@@ -23,16 +23,16 @@ class DNS_RECORD(Structure):
     [MS-DNSP] section 2.3.2.2
     """
     structure = (
-        ('DataLength', '<H-Data'),
-        ('Type', '<H'),
-        ('Version', 'B=5'),
-        ('Rank', 'B'),
-        ('Flags', '<H=0'),
-        ('Serial', '<L'),
-        ('TtlSeconds', '>L'),
-        ('Reserved', '<L=0'),
-        ('TimeStamp', '<L=0'),
-        ('Data', ':')
+        ("DataLength", "<H-Data"),
+        ("Type", "<H"),
+        ("Version", "B=5"),
+        ("Rank", "B"),
+        ("Flags", "<H=0"),
+        ("Serial", "<L"),
+        ("TtlSeconds", ">L"),
+        ("Reserved", "<L=0"),
+        ("TimeStamp", "<L=0"),
+        ("Data", ":")
     )
 
 
@@ -42,9 +42,8 @@ class DNS_RPC_RECORD_A(Structure):
     [MS-DNSP] section 2.2.2.2.4.1
     """
     structure = (
-        ('address', ':'),
+        ("address", ":"),
     )
-
 
 
 class NXCModule:
@@ -60,21 +59,32 @@ class NXCModule:
     def options(self, context, module_options):
         r"""
         METHOD          Method to use: ADD, CLEAR, UPDATE, PERM (permissions check), PERM_ALL
-        DATA            OPTIONAL: DNS entry IP address 
+        DATA            OPTIONAL: DNS entry IP address
         RECORD          OPTIONAL: DNS entry name
-        ZONE            OPTIONAL: DNZ Zone : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
-        ZNAME           OPTIONAL: DNZ zone where to add the entry (Default: domain name)
+        ZONE            OPTIONAL: DNZ target : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
+        ZNAME           OPTIONAL: DNZ Zone where to add the entry (Default: domain name)
 
         Example:
         -------
+        # ADD
+        # Simple add with default configuration
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=ADD DATA=<ip> RECORD=<entry name>
+        # Specific add
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=ADD DATA=<ip> RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY ZNAME=<zone name>
 
+        # UPDATE
+        # Simple update
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=UDAPTE DATA=<ip> RECORD=<entry name>
+
+        # CLEAR
         # Remove an entry on zone
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=CLEAR RECORD=<entry name> ZONE=
-        # Permission check on DNS Zone
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=CLEAR RECORD=<entry name>
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=CLEAR RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY ZNAME=<zone name>
+
+        # PERM
+        # Permission check on availables DNS Zone
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=PERM
+        # Same but with ACE details
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=PERM_ALL
         """
         self.logger = context.log
@@ -100,7 +110,6 @@ class NXCModule:
             self.logger.fail("Methods ADD/UPDATE/CLEAR need RECORD=<entry name>")
             exit(1)
 
-
     name = "dnstool"
     description = "Manipulate DNS entry: add, clear, update and check permissions"
     supported_protocols = ["ldap"]
@@ -113,10 +122,12 @@ class NXCModule:
             "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
         }
 
-        # entry_base = f"DC={self.record},DC={connction.domain},search_bases[self.zone]"
         search_base = search_bases[self.zone]
         if self.zname == "":
-            self.zname = connection.domain
+            if self.zone in ["DOMAIN", "LEGACY"]:
+                self.zname = connection.domain
+            elif self.zone == "FOREST":
+                self.zname = f"_msdcs.{connection.domain}"
 
         zone_base = f"DC={self.zname},{search_base}"
 
@@ -135,7 +146,7 @@ class NXCModule:
         if result and len(result) > 0:
             self.logger.fail(f"Record {self.record} already exists: try method UPDATE instead")
             exit(1)
-        
+
         record = DNS_RECORD()
         record["Type"] = 1
         record["Serial"] = int(datetime.datetime.now().timestamp())
@@ -156,39 +167,37 @@ class NXCModule:
 
         try:
             req = AddRequest()
-            req['entry'] = record_dn
+            req["entry"] = record_dn
 
             i = 0
 
-            req['attributes'].setComponentByPosition(i)
-            req['attributes'][i]['type'] = 'objectClass'
-            req['attributes'][i]['vals'].setComponentByPosition(0, 'top')
-            req['attributes'][i]['vals'].setComponentByPosition(1, 'dnsNode')
+            req["attributes"].setComponentByPosition(i)
+            req["attributes"][i]["type"] = "objectClass"
+            req["attributes"][i]["vals"].setComponentByPosition(0, "top")
+            req["attributes"][i]["vals"].setComponentByPosition(1, "dnsNode")
             i += 1
 
             for name, values in node_data.items():
-                req['attributes'].setComponentByPosition(i)
-                req['attributes'][i]['type'] = name
+                req["attributes"].setComponentByPosition(i)
+                req["attributes"][i]["type"] = name
 
                 if not isinstance(values, list):
                     values = [values]
 
-                j = 0
-                for v in values:
+                for j, v in enumerate(values):
                     if isinstance(v, bytes):
-                        req['attributes'][i]['vals'].setComponentByPosition(j, v)
+                        req["attributes"][i]["vals"].setComponentByPosition(j, v)
                     elif isinstance(v, bool):
-                        req['attributes'][i]['vals'].setComponentByPosition(j, 'TRUE' if v else 'FALSE')
+                        req["attributes"][i]["vals"].setComponentByPosition(j, "TRUE" if v else "FALSE")
                     else:
-                        req['attributes'][i]['vals'].setComponentByPosition(j, str(v))
-                    j += 1
+                        req["attributes"][i]["vals"].setComponentByPosition(j, str(v))
 
                 i += 1
 
-
-            resp = connection.ldap_connection.sendReceive(req)[0]['protocolOp']['addResponse']
-            if resp['resultCode'] != ResultCode('success'):
+            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["addResponse"]
+            if resp["resultCode"] != ResultCode("success"):
                 self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
+                self.logger.fail("Use METHOD=PERM to list the correct zone name")
             else:
                 self.logger.success(f"DNS record {self.record} ({self.data}) added")
 
@@ -203,11 +212,11 @@ class NXCModule:
 
     def update_entry(self, context, connection):
         return
-    
+
     def get_permission_name(self, mask):
         """Convert permission mask to readable names"""
         permissions = []
-        
+
         if mask & 0x10000000:  # GENERIC_ALL
             permissions.append("Full Control")
         if mask & 0x40000000:  # GENERIC_WRITE
@@ -222,18 +231,16 @@ class NXCModule:
             permissions.append("Write Property")
         if mask & 0x00000001:  # ADS_RIGHT_DS_CREATE_CHILD
             permissions.append("Create Child")
-        # if mask & 0x00000002:  # ADS_RIGHT_DS_DELETE_CHILD
-        #     permissions.append("Delete Child")
-        
-        return ", ".join(permissions) if permissions else f"Unknown"
-    
+
+        return ", ".join(permissions) if permissions else "Unknown"
+
     def lookup_sids(self, connection, sids):
         """Lookup SIDs to get friendly names"""
         sid_to_name = {}
-        
+
         if not sids:
             return sid_to_name
-        
+
         try:
             string_binding = rf"ncacn_np:{connection.host}[\pipe\lsarpc]"
             rpctransport = transport.DCERPCTransportFactory(string_binding)
@@ -246,24 +253,24 @@ class NXCModule:
             )
             rpctransport.set_connect_timeout(15)
             dce = rpctransport.get_dce_rpc()
-            
+
             if connection.kerberos:
                 dce.set_auth_type(RPC_C_AUTHN_GSS_NEGOTIATE)
-            
+
             dce.connect()
             dce.set_auth_level(RPC_C_AUTHN_LEVEL_PKT_PRIVACY)
             dce.bind(lsat.MSRPC_UUID_LSAT)
         except Exception as e:
             self.logger.debug(f"Error connecting to {string_binding}: {e}")
             return sid_to_name
-        
+
         try:
             policy_handle = lsad.hLsarOpenPolicy2(dce, MAXIMUM_ALLOWED | lsat.POLICY_LOOKUP_NAMES)["PolicyHandle"]
         except Exception as e:
             self.logger.debug(f"Unable to get policy handle: {e}")
             dce.disconnect()
             return sid_to_name
-        
+
         try:
             resp = lsat.hLsarLookupSids(dce, policy_handle, sids, lsat.LSAP_LOOKUP_LEVEL.LsapLookupWksta)
         except DCERPCException as e:
@@ -273,7 +280,7 @@ class NXCModule:
             else:
                 resp = None
                 self.logger.debug(f"Could not resolve SID(s): {e}")
-        
+
         if resp:
             domains = resp["ReferencedDomains"]["Domains"]
             for sid, item in zip(sids, resp["TranslatedNames"]["Names"], strict=False):
@@ -283,19 +290,14 @@ class NXCModule:
                     sid_to_name[sid] = f"{domain_name}\\{account_name}"
                 else:
                     sid_to_name[sid] = sid
-        
-        try:
-            dce.disconnect()
-        except:
-            pass
-        
+
         return sid_to_name
-    
+
     def check_permissions(self, context, connection, perm_all=False):
         search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}", # 90% use case
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}", # multi domain
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}" # old AD
+            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",  # 90% use case
+            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",  # multi domain
+            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"  # old AD
         }
 
         for dns_type, search_base in search_bases.items():
@@ -319,9 +321,9 @@ class NXCModule:
                 zone_name = zone.get("name", "Unknown")
                 self.logger.success(f"[{dns_type.upper()}] Zone: {zone_name}")
 
-                if "nTSecurityDescriptor" in zone and zone["nTSecurityDescriptor"]:
+                if zone.get("nTSecurityDescriptor"):
                     nt_sec_desc = zone["nTSecurityDescriptor"]
-                    
+
                     if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
                         nt_sec_desc = nt_sec_desc[0]
 
@@ -348,18 +350,18 @@ class NXCModule:
                         # Display
                         for sid, masks in sid_permissions.items():
                             name = sid_names.get(sid, sid)
-                            # 
+                            #
                             combined_mask = 0
                             for mask in masks:
                                 combined_mask |= mask
                             perms = self.get_permission_name(combined_mask)
                             if perm_all:
-                                self.logger.highlight(f"\t- \"{name}\"")
+                                self.logger.highlight(f'\t- "{name}"')
                                 self.logger.highlight(f"\t\t {perms}")
                             else:
-                                self.logger.highlight(f"\t- \"{name}\"")
+                                self.logger.highlight(f'\t- "{name}"')
 
-                    except Exception as e:
+                    except Exception:
                         pass
         return
 
@@ -374,7 +376,5 @@ class NXCModule:
         elif self.method == "ADD":
             self.logger.display("Adding DNS entry")
             self.add_entry(context, connection)
-        else:
-            pass
 
         return
