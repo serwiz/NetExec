@@ -63,12 +63,17 @@ class NXCModule:
         DATA            OPTIONAL: DNS entry IP address 
         RECORD          OPTIONAL: DNS entry name
         ZONE            OPTIONAL: DNZ Zone : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
+        ZNAME           OPTIONAL: DNZ zone where to add the entry (Default: domain name)
 
         Example:
         -------
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=ADD DATA=<ip> RECORD=<entry name>
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=ADD DATA=<ip> RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY ZNAME=<zone name>
+
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=UDAPTE DATA=<ip> RECORD=<entry name>
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=CLEAR RECORD=<entry name>
+        # Remove an entry on zone
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=CLEAR RECORD=<entry name> ZONE=
+        # Permission check on DNS Zone
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=PERM
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o METHOD=PERM_ALL
         """
@@ -81,6 +86,7 @@ class NXCModule:
         self.data = module_options.get("DATA")
         self.record = module_options.get("RECORD")
         self.zone = module_options.get("ZONE") or "DOMAIN"
+        self.zname = module_options.get("ZNAME") or ""
 
         if self.zone not in ["DOMAIN", "FOREST", "LEGACY"]:
             self.logger.fail("Invalid zone. Please choose between: DOMAIN, FOREST, LEGACY. (Default: DOMAIN)")
@@ -109,14 +115,16 @@ class NXCModule:
 
         # entry_base = f"DC={self.record},DC={connction.domain},search_bases[self.zone]"
         search_base = search_bases[self.zone]
-        zone_name = connection.domain
-        
-        # Check if DNS record already exists
+        if self.zname == "":
+            self.zname = connection.domain
+
+        zone_base = f"DC={self.zname},{search_base}"
+
         try:
             resp = connection.search(
                 searchFilter=f"(&(objectClass=dnsNode)(name={self.record}))",
                 attributes=["name"],
-                baseDN=f"DC={zone_name},{search_base}",
+                baseDN=zone_base,
             )
             result = parse_result_attributes(resp)
         except Exception as e:
@@ -136,7 +144,9 @@ class NXCModule:
         record["Data"] = DNS_RPC_RECORD_A()
         record["Data"]["address"] = socket.inet_aton(self.data)
 
-        record_dn = f"DC={self.record},DC={zone_name},{search_base}"
+        record_dn = f"DC={self.record},{zone_base}"
+
+        self.logger.success(f"Record: {record_dn}")
 
         node_data = {
                 "dNSTombstoned": False,
@@ -148,17 +158,14 @@ class NXCModule:
             req = AddRequest()
             req['entry'] = record_dn
 
-            # On construit la liste d'attributs en positions (pyasn1-friendly)
             i = 0
 
-            # --- objectClass obligatoire ---
             req['attributes'].setComponentByPosition(i)
             req['attributes'][i]['type'] = 'objectClass'
             req['attributes'][i]['vals'].setComponentByPosition(0, 'top')
             req['attributes'][i]['vals'].setComponentByPosition(1, 'dnsNode')
             i += 1
 
-            # --- autres attributs (node_data) ---
             for name, values in node_data.items():
                 req['attributes'].setComponentByPosition(i)
                 req['attributes'][i]['type'] = name
@@ -169,23 +176,21 @@ class NXCModule:
                 j = 0
                 for v in values:
                     if isinstance(v, bytes):
-                        # binaire (dnsRecord)
                         req['attributes'][i]['vals'].setComponentByPosition(j, v)
                     elif isinstance(v, bool):
-                        # AD accepte bien TRUE/FALSE
                         req['attributes'][i]['vals'].setComponentByPosition(j, 'TRUE' if v else 'FALSE')
                     else:
-                        # tout le reste en string
                         req['attributes'][i]['vals'].setComponentByPosition(j, str(v))
                     j += 1
 
                 i += 1
 
+
             resp = connection.ldap_connection.sendReceive(req)[0]['protocolOp']['addResponse']
             if resp['resultCode'] != ResultCode('success'):
-                self.logger.fail(f"{resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
-
-            self.logger.success(f"DNS record {self.record} ({self.data}) added")
+                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
+            else:
+                self.logger.success(f"DNS record {self.record} ({self.data}) added")
 
         except Exception as e:
             self.logger.debug(f"Error adding DNS record: {e}")
@@ -293,8 +298,8 @@ class NXCModule:
             "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}" # old AD
         }
 
-        zones = []
         for dns_type, search_base in search_bases.items():
+            zones = []
             try:
                 # Looking for every dnsZone object using 0x07 (owner, group, Dacl, Sacl)
                 resp = connection.search(
