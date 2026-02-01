@@ -7,7 +7,6 @@ from collections import defaultdict
 from nxc.helpers.misc import CATEGORY
 from nxc.parsers.ldap_results import parse_result_attributes
 
-# from ldap3.protocol.microsoft import security_descriptor_control
 from pyasn1.type.univ import Sequence, Integer, OctetString, Boolean
 from pyasn1.codec.ber.encoder import encode as ber_encode
 
@@ -60,7 +59,7 @@ class NXCModule:
 
     def options(self, context, module_options):
         r"""
-        ACTION          Method to use: ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), PERM (permissions check), PERM_ALL
+        ACTION          Method to use: QUERY, ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), PERM (permissions check), PERM_ALL
         DATA            OPTIONAL: DNS entry IP address
         RECORD          OPTIONAL: DNS entry name
         ZONE            OPTIONAL: DNZ target : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
@@ -68,6 +67,10 @@ class NXCModule:
 
         Example:
         -------
+        # QUERY
+        # Query DNS record informations
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=QUERY RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+
         # ADD
         # Simple add with default configuration
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=ADD DATA=<ip> RECORD=<entry name>
@@ -98,8 +101,8 @@ class NXCModule:
         """
         self.logger = context.log
         self.action = module_options.get("ACTION")
-        if not self.action or self.action.upper() not in ["ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "PERM_ALL"]:
-            self.logger.fail("You need to specify a method: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT")
+        if not self.action or self.action.upper() not in ["QUERY", "ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "PERM_ALL"]:
+            self.logger.fail("You need to specify an action: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT")
             exit(1)
 
         self.data = module_options.get("DATA")
@@ -115,7 +118,7 @@ class NXCModule:
             self.logger.fail("Methods ADD/UPDATE need DATA=<ip>")
             exit(1)
 
-        if self.action in ["ADD", "UPDATE", "CLEAR"] and not self.record:
+        if self.action in ["ADD", "UPDATE", "QUERY", "CLEAR"] and not self.record:
             self.logger.fail("Methods ADD/UPDATE/CLEAR need RECORD=<entry name>")
             exit(1)
 
@@ -137,6 +140,104 @@ class NXCModule:
         ctrl.setComponentByName("controlValue", OctetString(value))
 
         return [ctrl]
+
+    def query_entry(self, context, connection):
+        search_bases = {
+            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
+            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
+            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
+        }
+
+        search_base = search_bases[self.zone]
+        if self.zname == "":
+            if self.zone in ["DOMAIN", "LEGACY"]:
+                self.zname = connection.domain
+            elif self.zone == "FOREST":
+                self.zname = f"_msdcs.{connection.domain}"
+
+        zone_base = f"DC={self.zname},{search_base}"
+
+        try:
+            resp = connection.search(
+                searchFilter=f"(&(objectClass=dnsNode)(name={self.record}))",
+                attributes=["*","+"],
+                baseDN=zone_base,
+                searchControls=self.security_descriptor_control(sdFlags=0x07)
+            )
+            result = parse_result_attributes(resp)[0]
+        except Exception as e:
+            self.logger.debugger(f"Failed to query {search_base} :{e}")
+            self.logger.fail(f"Failed to search record inside {search_base}")
+            exit(1)
+
+        if not result:
+            self.logger.fail(f"Record {self.record} not found.")
+            exit(1)
+
+        # self.logger.success(f"SID: {result['objectSid']}")
+        created = datetime.datetime.strptime(result["whenCreated"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
+        changed = datetime.datetime.strptime(result["whenChanged"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
+
+        try:
+            ip = socket.inet_ntop(socket.AF_INET, result['dnsRecord'][24:28])
+        except Exception as e:
+            self.logger.debug(f"Error parsing IP: {e}")
+            ip = None
+
+        r_type = "A" if int.from_bytes(result['dnsRecord'][2:4], "little") == 1 else "AAAA"
+
+        rank = result['dnsRecord'][5]
+        rank_v = "DYNAMIC" if rank == 240 else "STATIC"
+        
+        self.logger.success(f"DN: {result['distinguishedName']}")
+        self.logger.success(f"NAME: {result['name']}")
+        self.logger.success(f"TYPE: {r_type}")
+        self.logger.success(f"{r_type}: {ip}")
+        self.logger.success(f"RANK: {rank} ({rank_v})")
+        self.logger.success(f"CREATED: {created}")
+        self.logger.success(f"LAST CHANGED: {changed}")
+        self.logger.success(f"TOMBSTONED: {result['dNSTombstoned']}")
+
+        nt_sec_desc = result["nTSecurityDescriptor"]
+        if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
+            nt_sec_desc = nt_sec_desc[0]
+
+
+        try:
+            nt_sec = ldaptypes.SR_SECURITY_DESCRIPTOR(data=nt_sec_desc)
+            owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec['OwnerSid'].formatCanonical()]).items()))
+            self.logger.success(f"OWNER NAME: {owner_name} ")
+            self.logger.success(f"OWNER SID: {owner_sid} ")
+            self.logger.success(f"PERMISSIONS:")
+            sid_permissions = defaultdict(list)
+            all_sids = []
+
+            if nt_sec["Dacl"]:
+                for ace in nt_sec["Dacl"].aces:
+                    try:
+                        ace_mask = ace["Ace"]["Mask"]["Mask"]
+                        # GENERIC_WRITE | GENERIC_ALL | WRITE_DAC | WRITE_OWNER | CREATE_CHILD
+                        if ace_mask & (0x40000000 | 0x10000000 | 0x00040000 | 0x00000020 | 0x00000001):
+                            sid = ace["Ace"]["Sid"].formatCanonical()
+                            if sid not in all_sids:
+                                all_sids.append(sid)
+                            sid_permissions[sid].append(ace_mask)
+                    except Exception as e:
+                        self.logger.debug(f"Error parsing Dacl : {e}")
+
+            # Lookup des SIDs
+            sid_names = self.lookup_sids(connection, all_sids)
+
+            # Display
+            for sid, masks in sid_permissions.items():
+                name = sid_names.get(sid, sid)
+                self.logger.highlight(f'\t- "{name}"')
+
+        except Exception as e:
+            self.logger.fail("Failed to parse the nTSecurityDescriptor attribute")
+            self.logger.debug(f"Exception: {e}")
+            exit(1)
+        
 
     def add_entry(self, context, connection):
         search_bases = {
@@ -365,6 +466,34 @@ class NXCModule:
         else:
             self.logger.fail(f"Record {self.record} not found")
             exit(1)
+
+        dn = result[0]["distinguishedName"]
+
+        record = DNS_RECORD()
+        record["Type"] = 1
+        record["Serial"] = int(datetime.datetime.now().timestamp())
+        record["TtlSeconds"] = 180
+        record["Rank"] = 240
+        record["Data"] = DNS_RPC_RECORD_A()
+        record["Data"]["address"] = socket.inet_aton(self.data)
+
+        req = ModifyRequest()
+        req["object"] = dn
+
+        req["changes"].setComponentByPosition(0)
+        req["changes"][0]["operation"] = 2
+        req["changes"][0]["modification"]["type"] = "dnsRecord"
+        req["changes"][0]["modification"]["vals"].setComponentByPosition(0, record.getData())
+        
+
+        resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
+
+        if resp["resultCode"] != ResultCode("success"):
+            self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
+            exit(1)
+        else:
+            self.logger.success(f"Successfully updated {self.record}: {self.data}")
+        
         return
 
     def get_permission_name(self, mask):
@@ -539,5 +668,11 @@ class NXCModule:
         elif self.action == "RESURRECT":
             self.logger.display("Resurrecting DNS entry")
             self.clear_entry(context, connection, resurrect=True)
+        elif self.action == "UPDATE":
+            self.logger.display("Updating DNS entry")
+            self.update_entry(context, connection)
+        elif self.action == "QUERY":
+            self.logger.display("Querying DNS entry")
+            self.query_entry(context, connection)
 
         return
