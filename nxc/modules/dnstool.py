@@ -11,7 +11,7 @@ from nxc.parsers.ldap_results import parse_result_attributes
 from pyasn1.type.univ import Sequence, Integer, OctetString, Boolean
 from pyasn1.codec.ber.encoder import encode as ber_encode
 
-from impacket.ldap.ldapasn1 import AddRequest, ResultCode, DelRequest, Control, LDAPOID
+from impacket.ldap.ldapasn1 import AddRequest, ResultCode, DelRequest, Control, LDAPOID, ModifyRequest
 from impacket.ldap import ldaptypes
 from impacket.structure import Structure
 from impacket.dcerpc.v5 import transport, lsat, lsad
@@ -98,8 +98,8 @@ class NXCModule:
         """
         self.logger = context.log
         self.action = module_options.get("ACTION")
-        if not self.action or self.action.upper() not in ["ADD", "CLEAR", "UPDATE", "PERM", "PERM_ALL"]:
-            self.logger.fail("You need to specify a method: ADD, CLEAR, UPDATE, PERM")
+        if not self.action or self.action.upper() not in ["ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "PERM_ALL"]:
+            self.logger.fail("You need to specify a method: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT")
             exit(1)
 
         self.data = module_options.get("DATA")
@@ -249,7 +249,7 @@ class NXCModule:
 
         resp = connection.search(
                 searchFilter=f"(&(objectClass=dnsNode)(name={self.record}))",
-                attributes=["name", "distinguishedName", "dnsRecord"],
+                attributes=["name", "distinguishedName", "dnsRecord", "dNSTombstoned"],
                 baseDN=search_base
                 )
 
@@ -257,6 +257,14 @@ class NXCModule:
 
         if result and len(result) > 0:
             dn = result[0]["distinguishedName"]
+            # SOUCIS DE TYPAGE SUR LE BOOLEAN
+            raw_tombstoned = result[0]["dNSTombstoned"]
+            if isinstance(raw_tombstoned, list):
+                raw_tombstoned = raw_tombstoned[0]
+            if isinstance(raw_tombstoned, str):
+                is_tombstoned = raw_tombstoned.upper() == "TRUE"
+            else:
+                is_tombstoned = bool(raw_tombstoned)
             try:
                 self.logger.success(f"Found {result[0]['name']} ({socket.inet_ntop(socket.AF_INET, result[0]['dnsRecord'][24:28])})")
             except Exception:
@@ -267,11 +275,52 @@ class NXCModule:
             exit(1)
 
         if tombstone:
-            self.logger.success("Trying to tombstone dnsNode")
+            if is_tombstoned:
+                self.logger.fail(f"Record already tombstoned. Try RESURRECT method instead.")
+                exit(1)
+                
+            self.logger.success("Performing TOMBSTONE on dnsNode")
+            req = ModifyRequest()
+            req["object"] = dn
+
+            # i = 0
+            req["changes"].setComponentByPosition(0)
+            req["changes"][0]["operation"] = 2
+            req["changes"][0]["modification"]["type"] = "dNSTombstoned"
+            req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "TRUE")
+            
+            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
+
+            if resp["resultCode"] != ResultCode("success"):
+                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp['diagnosticMessage']})
+                exit(1)
+
+            self.logger.success("dnsNode tombstoned")
+
         elif resurrect:
-            self.logger.success("Trying to resurrect dnsNode")
+            if not is_tombstoned:
+                self.logger.fail(f"Record already ALIVE. Try TOMBSTONE method instead.")
+                exit(1)
+
+            self.logger.success("Trying to RESURRECT dnsNode")
+            req = ModifyRequest()
+            req["object"] = dn
+
+            req["changes"].setComponentByPosition(0)
+            req["changes"][0]["operation"] = 2
+            req["changes"][0]["modification"]["type"] = "dNSTombstoned"
+            req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "FALSE")
+            
+            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
+
+            if resp["resultCode"] != ResultCode("success"):
+                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp['diagnosticMessage']})
+                exit(1)
+
+            self.logger.success("dnsNode ressurected")
+
         else:
-            self.logger.success("Trying to delete dnsNode")
+            self.logger.success("Performing LDAP DELETE on dnsNode")
 
             req = DelRequest(dn)
 
@@ -281,7 +330,7 @@ class NXCModule:
                 self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
                 exit(1)
 
-            self.logger.success(f"DNS record {self.record} cleared")
+            self.logger.success(f"DNS record \"{self.record}\" cleared")
 
         return
 
@@ -440,6 +489,7 @@ class NXCModule:
                             for ace in nt_sec["Dacl"].aces:
                                 try:
                                     ace_mask = ace["Ace"]["Mask"]["Mask"]
+                                    # GENERIC_WRITE | GENERIC_ALL | WRITE_DAC | WRITE_OWNER | CREATE_CHILD
                                     if ace_mask & (0x40000000 | 0x10000000 | 0x00040000 | 0x00000020 | 0x00000001):
                                         sid = ace["Ace"]["Sid"].formatCanonical()
                                         if sid not in all_sids:
