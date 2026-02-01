@@ -128,11 +128,11 @@ class NXCModule:
     category = CATEGORY.ENUMERATION
 
     def security_descriptor_control(self, criticality=False, sdFlags=0x0F):
-        oid="1.2.840.113556.1.4.801"
+        oid = "1.2.840.113556.1.4.801"
 
         seq = Sequence()
         seq.setComponentByPosition(0, Integer(sdFlags))
-        value =ber_encode(seq)
+        value = ber_encode(seq)
 
         ctrl = Control()
         ctrl.setComponentByName("controlType", LDAPOID(oid))
@@ -160,13 +160,13 @@ class NXCModule:
         try:
             resp = connection.search(
                 searchFilter=f"(&(objectClass=dnsNode)(name={self.record}))",
-                attributes=["*","+"],
+                attributes=["*", "+"],
                 baseDN=zone_base,
                 searchControls=self.security_descriptor_control(sdFlags=0x07)
             )
-            result = parse_result_attributes(resp)[0]
+            result = parse_result_attributes(resp)
         except Exception as e:
-            self.logger.debugger(f"Failed to query {search_base} :{e}")
+            self.logger.debug(f"Failed to query {search_base} :{e}")
             self.logger.fail(f"Failed to search record inside {search_base}")
             exit(1)
 
@@ -174,21 +174,22 @@ class NXCModule:
             self.logger.fail(f"Record {self.record} not found.")
             exit(1)
 
-        # self.logger.success(f"SID: {result['objectSid']}")
+        result = result[0]
+
         created = datetime.datetime.strptime(result["whenCreated"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
         changed = datetime.datetime.strptime(result["whenChanged"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
 
         try:
-            ip = socket.inet_ntop(socket.AF_INET, result['dnsRecord'][24:28])
+            ip = socket.inet_ntop(socket.AF_INET, result["dnsRecord"][24:28])
         except Exception as e:
             self.logger.debug(f"Error parsing IP: {e}")
             ip = None
 
-        r_type = "A" if int.from_bytes(result['dnsRecord'][2:4], "little") == 1 else "AAAA"
+        r_type = "A" if int.from_bytes(result["dnsRecord"][2:4], "little") == 1 else "AAAA"
 
-        rank = result['dnsRecord'][5]
+        rank = result["dnsRecord"][5]
         rank_v = "DYNAMIC" if rank == 240 else "STATIC"
-        
+
         self.logger.success(f"DN: {result['distinguishedName']}")
         self.logger.success(f"NAME: {result['name']}")
         self.logger.success(f"TYPE: {r_type}")
@@ -202,13 +203,12 @@ class NXCModule:
         if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
             nt_sec_desc = nt_sec_desc[0]
 
-
         try:
             nt_sec = ldaptypes.SR_SECURITY_DESCRIPTOR(data=nt_sec_desc)
-            owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec['OwnerSid'].formatCanonical()]).items()))
+            owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec["OwnerSid"].formatCanonical()]).items()))
             self.logger.success(f"OWNER NAME: {owner_name} ")
             self.logger.success(f"OWNER SID: {owner_sid} ")
-            self.logger.success(f"PERMISSIONS:")
+            self.logger.success("PERMISSIONS:")
             sid_permissions = defaultdict(list)
             all_sids = []
 
@@ -229,7 +229,7 @@ class NXCModule:
             sid_names = self.lookup_sids(connection, all_sids)
 
             # Display
-            for sid, masks in sid_permissions.items():
+            for sid in sid_permissions:
                 name = sid_names.get(sid, sid)
                 self.logger.highlight(f'\t- "{name}"')
 
@@ -237,7 +237,6 @@ class NXCModule:
             self.logger.fail("Failed to parse the nTSecurityDescriptor attribute")
             self.logger.debug(f"Exception: {e}")
             exit(1)
-        
 
     def add_entry(self, context, connection):
         search_bases = {
@@ -358,14 +357,10 @@ class NXCModule:
 
         if result and len(result) > 0:
             dn = result[0]["distinguishedName"]
-            # SOUCIS DE TYPAGE SUR LE BOOLEAN
             raw_tombstoned = result[0]["dNSTombstoned"]
             if isinstance(raw_tombstoned, list):
                 raw_tombstoned = raw_tombstoned[0]
-            if isinstance(raw_tombstoned, str):
-                is_tombstoned = raw_tombstoned.upper() == "TRUE"
-            else:
-                is_tombstoned = bool(raw_tombstoned)
+            is_tombstoned = raw_tombstoned.upper() == "TRUE" if isinstance(raw_tombstoned, str) else bool(raw_tombstoned)
             try:
                 self.logger.success(f"Found {result[0]['name']} ({socket.inet_ntop(socket.AF_INET, result[0]['dnsRecord'][24:28])})")
             except Exception:
@@ -377,30 +372,29 @@ class NXCModule:
 
         if tombstone:
             if is_tombstoned:
-                self.logger.fail(f"Record already tombstoned. Try RESURRECT method instead.")
+                self.logger.fail("Record already tombstoned. Try RESURRECT method instead.")
                 exit(1)
-                
+
             self.logger.success("Performing TOMBSTONE on dnsNode")
             req = ModifyRequest()
             req["object"] = dn
 
-            # i = 0
             req["changes"].setComponentByPosition(0)
             req["changes"][0]["operation"] = 2
             req["changes"][0]["modification"]["type"] = "dNSTombstoned"
             req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "TRUE")
-            
+
             resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
 
             if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp['diagnosticMessage']})
+                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp["diagnosticMessage"]})
                 exit(1)
 
             self.logger.success("dnsNode tombstoned")
 
         elif resurrect:
             if not is_tombstoned:
-                self.logger.fail(f"Record already ALIVE. Try TOMBSTONE method instead.")
+                self.logger.fail("Record already ALIVE. Try TOMBSTONE method instead.")
                 exit(1)
 
             self.logger.success("Trying to RESURRECT dnsNode")
@@ -411,11 +405,11 @@ class NXCModule:
             req["changes"][0]["operation"] = 2
             req["changes"][0]["modification"]["type"] = "dNSTombstoned"
             req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "FALSE")
-            
+
             resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
 
             if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp['diagnosticMessage']})
+                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp["diagnosticMessage"]})
                 exit(1)
 
             self.logger.success("dnsNode ressurected")
@@ -431,7 +425,7 @@ class NXCModule:
                 self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
                 exit(1)
 
-            self.logger.success(f"DNS record \"{self.record}\" cleared")
+            self.logger.success(f'DNS record "{self.record}" cleared')
 
         return
 
@@ -484,7 +478,6 @@ class NXCModule:
         req["changes"][0]["operation"] = 2
         req["changes"][0]["modification"]["type"] = "dnsRecord"
         req["changes"][0]["modification"]["vals"].setComponentByPosition(0, record.getData())
-        
 
         resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
 
@@ -493,7 +486,7 @@ class NXCModule:
             exit(1)
         else:
             self.logger.success(f"Successfully updated {self.record}: {self.data}")
-        
+
         return
 
     def get_permission_name(self, mask):
