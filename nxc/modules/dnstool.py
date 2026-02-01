@@ -7,9 +7,11 @@ from collections import defaultdict
 from nxc.helpers.misc import CATEGORY
 from nxc.parsers.ldap_results import parse_result_attributes
 
-from ldap3.protocol.microsoft import security_descriptor_control
+# from ldap3.protocol.microsoft import security_descriptor_control
+from pyasn1.type.univ import Sequence, Integer, OctetString, Boolean
+from pyasn1.codec.ber.encoder import encode as ber_encode
 
-from impacket.ldap.ldapasn1 import AddRequest, ResultCode, DelRequest
+from impacket.ldap.ldapasn1 import AddRequest, ResultCode, DelRequest, Control, LDAPOID
 from impacket.ldap import ldaptypes
 from impacket.structure import Structure
 from impacket.dcerpc.v5 import transport, lsat, lsad
@@ -121,6 +123,20 @@ class NXCModule:
     description = "Manipulate DNS entry: add, clear, update and check permissions"
     supported_protocols = ["ldap"]
     category = CATEGORY.ENUMERATION
+
+    def security_descriptor_control(self, criticality=False, sdFlags=0x0F):
+        oid="1.2.840.113556.1.4.801"
+
+        seq = Sequence()
+        seq.setComponentByPosition(0, Integer(sdFlags))
+        value =ber_encode(seq)
+
+        ctrl = Control()
+        ctrl.setComponentByName("controlType", LDAPOID(oid))
+        ctrl.setComponentByName("criticality", Boolean(criticality))
+        ctrl.setComponentByName("controlValue", OctetString(value))
+
+        return [ctrl]
 
     def add_entry(self, context, connection):
         search_bases = {
@@ -396,7 +412,7 @@ class NXCModule:
                     searchFilter="(objectClass=dnsZone)",
                     attributes=["name", "nTSecurityDescriptor"],
                     baseDN=search_base,
-                    searchControls=security_descriptor_control(sdflags=0x07)
+                    searchControls=self.security_descriptor_control(sdFlags=0x07)
                 )
                 zones += parse_result_attributes(resp)
             except Exception as e:
