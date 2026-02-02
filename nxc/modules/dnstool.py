@@ -59,7 +59,7 @@ class NXCModule:
 
     def options(self, context, module_options):
         r"""
-        ACTION          Method to use: QUERY, ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), PERM (permissions check), PERM_ALL
+        ACTION          Method to use: QUERY, ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), LIST (list DNS zones), PERM (permissions check)
         DATA            OPTIONAL: DNS entry IP address
         RECORD          OPTIONAL: DNS entry name
         ZONE            OPTIONAL: DNZ target : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
@@ -93,15 +93,17 @@ class NXCModule:
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name>
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
 
+        # LIST
+        # List availables DNS zone
+        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=LIST
+
         # PERM
         # Permission check on availables DNS Zone
         nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=PERM
-        # Same but with ACE details
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=PERM_ALL
         """
         self.logger = context.log
         self.action = module_options.get("ACTION")
-        if not self.action or self.action.upper() not in ["QUERY", "ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "PERM_ALL"]:
+        if not self.action or self.action.upper() not in ["QUERY", "ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "LIST"]:
             self.logger.fail("You need to specify an action: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT")
             exit(1)
 
@@ -164,79 +166,90 @@ class NXCModule:
                 baseDN=zone_base,
                 searchControls=self.security_descriptor_control(sdFlags=0x07)
             )
-            result = parse_result_attributes(resp)
+            results = parse_result_attributes(resp)
         except Exception as e:
             self.logger.debug(f"Failed to query {search_base} :{e}")
             self.logger.fail(f"Failed to search record inside {search_base}")
             exit(1)
 
-        if not result:
+        if not results:
             self.logger.fail(f"Record {self.record} not found.")
             exit(1)
 
-        result = result[0]
+        # result = result[0]
 
-        created = datetime.datetime.strptime(result["whenCreated"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
-        changed = datetime.datetime.strptime(result["whenChanged"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
+        for result in results:
+            created = datetime.datetime.strptime(result["whenCreated"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
+            changed = datetime.datetime.strptime(result["whenChanged"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
 
-        try:
-            ip = socket.inet_ntop(socket.AF_INET, result["dnsRecord"][24:28])
-        except Exception as e:
-            self.logger.debug(f"Error parsing IP: {e}")
-            ip = None
+            try:
+                ip = socket.inet_ntop(socket.AF_INET, result["dnsRecord"][24:28])
+            except Exception as e:
+                self.logger.debug(f"Error parsing IP: {e}")
+                ip = None
 
-        r_type = "A" if int.from_bytes(result["dnsRecord"][2:4], "little") == 1 else "AAAA"
+            try:
+                r_type = "A" if int.from_bytes(result["dnsRecord"][2:4], "little") == 1 else "AAAA"
+            except Exception as e:
+                self.logger.debug(f"Error getting record type for {result['name']}: {e}")
+                r_type = "UNKNOWN"
 
-        rank = result["dnsRecord"][5]
-        rank_v = "DYNAMIC" if rank == 240 else "STATIC"
+            try:
+                rank = result["dnsRecord"][5]
+                rank_v = "(DYNAMIC)" if rank == 240 else "(STATIC)"
+            except Exception as e:
+                self.logger.debug(f"Error getting record rank for {result['name']}: {e}")
+                rank = "UNKNOW"
+                rank_v = ""
 
-        self.logger.success(f"DN: {result['distinguishedName']}")
-        self.logger.success(f"NAME: {result['name']}")
-        self.logger.success(f"TYPE: {r_type}")
-        self.logger.success(f"{r_type}: {ip}")
-        self.logger.success(f"RANK: {rank} ({rank_v})")
-        self.logger.success(f"CREATED: {created}")
-        self.logger.success(f"LAST CHANGED: {changed}")
-        self.logger.success(f"TOMBSTONED: {result['dNSTombstoned']}")
 
-        nt_sec_desc = result["nTSecurityDescriptor"]
-        if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
-            nt_sec_desc = nt_sec_desc[0]
+            self.logger.success(f"DN: {result['distinguishedName']}")
+            self.logger.success(f"NAME: {result['name']}")
+            self.logger.success(f"TYPE: {r_type}")
+            self.logger.success(f"{r_type}: {ip}")
+            self.logger.success(f"RANK: {rank} {rank_v}")
+            self.logger.success(f"CREATED: {created}")
+            self.logger.success(f"LAST CHANGED: {changed}")
+            self.logger.success(f"TOMBSTONED: {result['dNSTombstoned']}")
 
-        try:
-            nt_sec = ldaptypes.SR_SECURITY_DESCRIPTOR(data=nt_sec_desc)
-            owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec["OwnerSid"].formatCanonical()]).items()))
-            self.logger.success(f"OWNER NAME: {owner_name} ")
-            self.logger.success(f"OWNER SID: {owner_sid} ")
-            self.logger.success("PERMISSIONS:")
-            sid_permissions = defaultdict(list)
-            all_sids = []
+            nt_sec_desc = result["nTSecurityDescriptor"]
+            if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
+                nt_sec_desc = nt_sec_desc[0]
 
-            if nt_sec["Dacl"]:
-                for ace in nt_sec["Dacl"].aces:
-                    try:
-                        ace_mask = ace["Ace"]["Mask"]["Mask"]
-                        # GENERIC_WRITE | GENERIC_ALL | WRITE_DAC | WRITE_OWNER | CREATE_CHILD
-                        if ace_mask & (0x40000000 | 0x10000000 | 0x00040000 | 0x00000020 | 0x00000001):
-                            sid = ace["Ace"]["Sid"].formatCanonical()
-                            if sid not in all_sids:
-                                all_sids.append(sid)
-                            sid_permissions[sid].append(ace_mask)
-                    except Exception as e:
-                        self.logger.debug(f"Error parsing Dacl : {e}")
+            try:
+                nt_sec = ldaptypes.SR_SECURITY_DESCRIPTOR(data=nt_sec_desc)
+                owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec["OwnerSid"].formatCanonical()]).items()))
+                self.logger.success(f"OWNER NAME: {owner_name} ")
+                self.logger.success(f"OWNER SID: {owner_sid} ")
+                self.logger.success("PERMISSIONS:")
+                sid_permissions = defaultdict(list)
+                all_sids = []
 
-            # Lookup des SIDs
-            sid_names = self.lookup_sids(connection, all_sids)
+                if nt_sec["Dacl"]:
+                    for ace in nt_sec["Dacl"].aces:
+                        try:
+                            ace_mask = ace["Ace"]["Mask"]["Mask"]
+                            # GENERIC_WRITE | GENERIC_ALL | WRITE_DAC | WRITE_OWNER | CREATE_CHILD
+                            if ace_mask & (0x40000000 | 0x10000000 | 0x00040000 | 0x00000020 | 0x00000001):
+                                sid = ace["Ace"]["Sid"].formatCanonical()
+                                if sid not in all_sids:
+                                    all_sids.append(sid)
+                                sid_permissions[sid].append(ace_mask)
+                        except Exception as e:
+                            self.logger.debug(f"Error parsing Dacl : {e}")
 
-            # Display
-            for sid in sid_permissions:
-                name = sid_names.get(sid, sid)
-                self.logger.highlight(f'\t- "{name}"')
+                # Lookup des SIDs
+                sid_names = self.lookup_sids(connection, all_sids)
 
-        except Exception as e:
-            self.logger.fail("Failed to parse the nTSecurityDescriptor attribute")
-            self.logger.debug(f"Exception: {e}")
-            exit(1)
+                # Display
+                for sid in sid_permissions:
+                    name = sid_names.get(sid, sid)
+                    self.logger.highlight(f'\t- "{name}"')
+
+            except Exception as e:
+                self.logger.fail("Failed to parse the nTSecurityDescriptor attribute")
+                self.logger.debug(f"Exception: {e}")
+                exit(1)
 
     def add_entry(self, context, connection):
         search_bases = {
@@ -253,6 +266,7 @@ class NXCModule:
                 self.zname = f"_msdcs.{connection.domain}"
 
         zone_base = f"DC={self.zname},{search_base}"
+        self.record = self.record.replace('.','').replace('_','')
 
         try:
             resp = connection.search(
@@ -471,6 +485,9 @@ class NXCModule:
         record["Data"] = DNS_RPC_RECORD_A()
         record["Data"]["address"] = socket.inet_aton(self.data)
 
+        
+        # rank = result["dnsRecord"][5]
+
         req = ModifyRequest()
         req["object"] = dn
 
@@ -590,11 +607,18 @@ class NXCModule:
                 self.logger.debug(f"Error during dnsZone ldap search : {e}")
                 exit(1)
 
+            if perm_all:
+                self.logger.display(f"[{dns_type.upper()}]")
+            else:
+                self.logger.success(f"[{dns_type.upper()}]")
             for zone in zones:
                 if zone is None:
                     continue
                 zone_name = zone.get("name", "Unknown")
-                self.logger.success(f"[{dns_type.upper()}] Zone: {zone_name}")
+                if perm_all:
+                    self.logger.success(f"{zone_name}")
+                else:
+                    self.logger.highlight(f"\t- {zone_name}")
 
                 if zone.get("nTSecurityDescriptor"):
                     nt_sec_desc = zone["nTSecurityDescriptor"]
@@ -634,8 +658,6 @@ class NXCModule:
                             if perm_all:
                                 self.logger.highlight(f'\t- "{name}"')
                                 self.logger.highlight(f"\t\t {perms}")
-                            else:
-                                self.logger.highlight(f'\t- "{name}"')
 
                     except Exception:
                         pass
@@ -643,14 +665,15 @@ class NXCModule:
 
     def on_login(self, context, connection):
 
-        if self.action == "PERM":
-            self.logger.display("Getting DNS write permissions")
+        if self.action == "LIST":
+            self.logger.display("Listing available DNS zones")
             self.check_permissions(context, connection)
-        elif self.action == "PERM_ALL":
-            self.logger.display("Getting DNS write permissions with display")
+        elif self.action == "PERM":
+            self.logger.display("Getting DNS write permissions")
             self.check_permissions(context, connection, perm_all=True)
         elif self.action == "ADD":
             self.logger.display("Adding DNS entry")
+            self.logger.display('WARNING: Do not add record with "." or "_" inside.')
             self.add_entry(context, connection)
         elif self.action == "CLEAR":
             self.logger.display("Deleting DNS entry")
