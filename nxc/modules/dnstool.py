@@ -176,7 +176,8 @@ class NXCModule:
             self.logger.fail(f"Record {self.record} not found.")
             exit(1)
 
-        # result = result[0]
+        w = "records" if len(results) > 1 else "record"
+        self.logger.success(f"Found {len(results)} {w}\n\n")
 
         for result in results:
             created = datetime.datetime.strptime(result["whenCreated"].split(".")[0], "%Y%m%d%H%M%S").replace(tzinfo=datetime.timezone.utc)
@@ -202,9 +203,8 @@ class NXCModule:
                 rank = "UNKNOW"
                 rank_v = ""
 
-
-            self.logger.success(f"DN: {result['distinguishedName']}")
-            self.logger.success(f"NAME: {result['name']}")
+            self.logger.display(f"DN: {result['distinguishedName']}")
+            self.logger.display(f"NAME: {result['name']}")
             self.logger.success(f"TYPE: {r_type}")
             self.logger.success(f"{r_type}: {ip}")
             self.logger.success(f"RANK: {rank} {rank_v}")
@@ -219,9 +219,8 @@ class NXCModule:
             try:
                 nt_sec = ldaptypes.SR_SECURITY_DESCRIPTOR(data=nt_sec_desc)
                 owner_sid, owner_name = next(iter(self.lookup_sids(connection, [nt_sec["OwnerSid"].formatCanonical()]).items()))
-                self.logger.success(f"OWNER NAME: {owner_name} ")
-                self.logger.success(f"OWNER SID: {owner_sid} ")
-                self.logger.success("PERMISSIONS:")
+                self.logger.success(f'OWNER: "{owner_name}" ({owner_sid})')
+                self.logger.success("WRITE PERMISSIONS:")
                 sid_permissions = defaultdict(list)
                 all_sids = []
 
@@ -246,6 +245,7 @@ class NXCModule:
                     name = sid_names.get(sid, sid)
                     self.logger.highlight(f'\t- "{name}"')
 
+                print("")
             except Exception as e:
                 self.logger.fail("Failed to parse the nTSecurityDescriptor attribute")
                 self.logger.debug(f"Exception: {e}")
@@ -266,7 +266,7 @@ class NXCModule:
                 self.zname = f"_msdcs.{connection.domain}"
 
         zone_base = f"DC={self.zname},{search_base}"
-        self.record = self.record.replace('.','').replace('_','')
+        self.record = self.record.replace(".", "").replace("_", "")
 
         try:
             resp = connection.search(
@@ -484,9 +484,6 @@ class NXCModule:
         record["Rank"] = 240
         record["Data"] = DNS_RPC_RECORD_A()
         record["Data"]["address"] = socket.inet_aton(self.data)
-
-        
-        # rank = result["dnsRecord"][5]
 
         req = ModifyRequest()
         req["object"] = dn
