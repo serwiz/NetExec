@@ -662,6 +662,7 @@ class NXCModule:
 
     def on_login(self, context, connection):
 
+        self.logger.display(f"{dir(connection.ldap_connection)}")
         if self.action == "LIST":
             self.logger.display("Listing available DNS zones")
             self.check_permissions(context, connection)
