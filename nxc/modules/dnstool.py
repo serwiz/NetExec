@@ -299,48 +299,51 @@ class NXCModule:
         node_data = {
                 "dNSTombstoned": False,
                 "name": self.record,
-                "dnsRecord": [record.getData()]
+                "dnsRecord": record.getData()
                 }
 
-        try:
-            req = AddRequest()
-            req["entry"] = record_dn
+        # try:
+        components = ["top", "dnsNode"]
+        if connection.ldap_connection.add(record_dn, components, attributes=node_data):
+            self.logger.success(f"DNS record {self.record} ({self.data}) added")
+            # req = AddRequest()
+            # req["entry"] = record_dn
+            #
+            # i = 0
+            #
+            # req["attributes"].setComponentByPosition(i)
+            # req["attributes"][i]["type"] = "objectClass"
+            # req["attributes"][i]["vals"].setComponentByPosition(0, "top")
+            # req["attributes"][i]["vals"].setComponentByPosition(1, "dnsNode")
+            # i += 1
+            #
+            # for name, values in node_data.items():
+            #     req["attributes"].setComponentByPosition(i)
+            #     req["attributes"][i]["type"] = name
+            #
+            #     if not isinstance(values, list):
+            #         values = [values]
+            #
+            #     for j, v in enumerate(values):
+            #         if isinstance(v, bytes):
+            #             req["attributes"][i]["vals"].setComponentByPosition(j, v)
+            #         elif isinstance(v, bool):
+            #             req["attributes"][i]["vals"].setComponentByPosition(j, "TRUE" if v else "FALSE")
+            #         else:
+            #             req["attributes"][i]["vals"].setComponentByPosition(j, str(v))
+            #
+            #     i += 1
+            #
+            # resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["addResponse"]
+            # if resp["resultCode"] != ResultCode("success"):
+            #     self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
+            #     self.logger.fail("Use ACTION=PERM to list the correct zone name")
+            # else:
+            #     self.logger.success(f"DNS record {self.record} ({self.data}) added")
 
-            i = 0
-
-            req["attributes"].setComponentByPosition(i)
-            req["attributes"][i]["type"] = "objectClass"
-            req["attributes"][i]["vals"].setComponentByPosition(0, "top")
-            req["attributes"][i]["vals"].setComponentByPosition(1, "dnsNode")
-            i += 1
-
-            for name, values in node_data.items():
-                req["attributes"].setComponentByPosition(i)
-                req["attributes"][i]["type"] = name
-
-                if not isinstance(values, list):
-                    values = [values]
-
-                for j, v in enumerate(values):
-                    if isinstance(v, bytes):
-                        req["attributes"][i]["vals"].setComponentByPosition(j, v)
-                    elif isinstance(v, bool):
-                        req["attributes"][i]["vals"].setComponentByPosition(j, "TRUE" if v else "FALSE")
-                    else:
-                        req["attributes"][i]["vals"].setComponentByPosition(j, str(v))
-
-                i += 1
-
-            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["addResponse"]
-            if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
-                self.logger.fail("Use ACTION=PERM to list the correct zone name")
-            else:
-                self.logger.success(f"DNS record {self.record} ({self.data}) added")
-
-        except Exception as e:
-            self.logger.debug(f"Error adding DNS record: {e}")
-            exit(1)
+        # except Exception as e:
+        #     self.logger.debug(f"Error adding DNS record: {e!s}")
+        #     exit(1)
 
         return
 
@@ -607,7 +610,8 @@ class NXCModule:
             if perm_all:
                 self.logger.display(f"[{dns_type.upper()}]")
             else:
-                self.logger.success(f"[{dns_type.upper()}]")
+                w = "zones" if len(zones) > 1 else "zone" 
+                self.logger.success(f"[{dns_type.upper()}] Found {len(zones)} {w}")
             for zone in zones:
                 if zone is None:
                     continue
@@ -662,7 +666,7 @@ class NXCModule:
 
     def on_login(self, context, connection):
 
-        self.logger.display(f"{dir(connection.ldap_connection)}")
+        # self.logger.display(f"{dir(connection.ldap_connection)}")
         if self.action == "LIST":
             self.logger.display("Listing available DNS zones")
             self.check_permissions(context, connection)
