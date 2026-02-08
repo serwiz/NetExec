@@ -10,7 +10,7 @@ from nxc.parsers.ldap_results import parse_result_attributes
 from pyasn1.type.univ import Sequence, Integer, OctetString, Boolean
 from pyasn1.codec.ber.encoder import encode as ber_encode
 
-from impacket.ldap.ldapasn1 import AddRequest, ResultCode, DelRequest, Control, LDAPOID, ModifyRequest
+from impacket.ldap.ldapasn1 import Control, LDAPOID
 from impacket.ldap import ldaptypes
 from impacket.structure import Structure
 from impacket.dcerpc.v5 import transport, lsat, lsad
@@ -59,7 +59,7 @@ class NXCModule:
 
     def options(self, context, module_options):
         r"""
-        ACTION          Method to use: QUERY, ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), LIST (list DNS zones), PERM (permissions check)
+        ACTION          Method to use: QUERY, ADD, CLEAR, UPDATE, TOMBSTONE (tombstone entry), RESURRECT (resurrect entry), LIST (list DNS zones), PERM (permissions check), DUMP (get all dns entry)
         DATA            OPTIONAL: DNS entry IP address
         RECORD          OPTIONAL: DNS entry name
         ZONE            OPTIONAL: DNZ target : DOMAIN, FOREST, LEGACY (Default: DOMAIN)
@@ -69,47 +69,52 @@ class NXCModule:
         -------
         # QUERY
         # Query DNS record informations
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=QUERY RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=QUERY RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
 
         # ADD
         # Simple add with default configuration
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=ADD DATA=<ip> RECORD=<entry name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=ADD DATA=<ip> RECORD=<entry name>
         # Specific add
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=ADD DATA=<ip> RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=ADD DATA=<ip> RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
 
         # UPDATE
         # Simple update
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=UDAPTE DATA=<ip> RECORD=<entry name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=UDAPTE DATA=<ip> RECORD=<entry name>
 
         # CLEAR
         # Remove an entry on zone
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=CLEAR RECORD=<entry name>
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=CLEAR RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=CLEAR RECORD=<entry name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=CLEAR RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
 
-        # TOMBSTONE
         # TOMBSTONE OR RESURRECT entry
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=TOMBSTONE RECORD=<entry name>
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=TOMBSTONE RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name>
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=TOMBSTONE RECORD=<entry name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=TOMBSTONE RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name>
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=RESURRECT RECORD=<entry name> ZONE=DOMAIN/FOREST/LEGACY (Default: DOMAIN) ZNAME=<zone name>
 
         # LIST
         # List availables DNS zone
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=LIST
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=LIST
 
         # PERM
         # Permission check on availables DNS Zone
-        nxc smb <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=PERM
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=PERM
+
+        # DUMP
+        # Dump all entries (record_name:IP)
+        nxc ldap <dc_ip> -u <user> -p <password> -M dnstool -o ACTION=DUMP
+
         """
         self.logger = context.log
         self.action = module_options.get("ACTION")
-        if not self.action or self.action.upper() not in ["QUERY", "ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "LIST"]:
-            self.logger.fail("You need to specify an action: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT")
+        if not self.action or self.action.upper() not in ["QUERY", "ADD", "CLEAR", "TOMBSTONE", "RESURRECT", "UPDATE", "PERM", "LIST", "DUMP"]:
+            self.logger.fail("You need to specify an action: ADD, CLEAR, UPDATE, PERM, TOMBSTONE, RESURRECT, LIST, DUMP")
             exit(1)
 
         self.data = module_options.get("DATA")
         self.record = module_options.get("RECORD")
         self.zone = module_options.get("ZONE") or "DOMAIN"
+        self.zone = self.zone.upper()
         self.zname = module_options.get("ZNAME") or ""
 
         if self.zone not in ["DOMAIN", "FOREST", "LEGACY"]:
@@ -129,6 +134,14 @@ class NXCModule:
     supported_protocols = ["ldap"]
     category = CATEGORY.ENUMERATION
 
+    def get_sbase(self, connection, zone="DOMAIN", full=False):
+        search_bases = {
+            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
+            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
+            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
+            }
+        return search_bases[zone] if not full else search_bases
+
     def security_descriptor_control(self, criticality=False, sdFlags=0x0F):
         oid = "1.2.840.113556.1.4.801"
 
@@ -144,13 +157,8 @@ class NXCModule:
         return [ctrl]
 
     def query_entry(self, context, connection):
-        search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
-        }
 
-        search_base = search_bases[self.zone]
+        search_base = self.get_sbase(connection, self.zone)
         if self.zname == "":
             if self.zone in ["DOMAIN", "LEGACY"]:
                 self.zname = connection.domain
@@ -187,30 +195,36 @@ class NXCModule:
                 ip = socket.inet_ntop(socket.AF_INET, result["dnsRecord"][24:28])
             except Exception as e:
                 self.logger.debug(f"Error parsing IP: {e}")
-                ip = None
+                ip = "?"
 
             try:
                 r_type = "A" if int.from_bytes(result["dnsRecord"][2:4], "little") == 1 else "AAAA"
             except Exception as e:
                 self.logger.debug(f"Error getting record type for {result['name']}: {e}")
-                r_type = "UNKNOWN"
+                r_type = "?"
 
             try:
                 rank = result["dnsRecord"][5]
                 rank_v = "(DYNAMIC)" if rank == 240 else "(STATIC)"
             except Exception as e:
                 self.logger.debug(f"Error getting record rank for {result['name']}: {e}")
-                rank = "UNKNOW"
-                rank_v = ""
+                rank = "?"
+                rank_v = "?"
+
+            try:
+                tombstoned = result["dNSTombstoned"]
+            except Exception:
+                self.logger.debug(f"Error getting tombstoned status for {result['name']}")
+                tombstoned = "?"
 
             self.logger.display(f"DN: {result['distinguishedName']}")
             self.logger.display(f"NAME: {result['name']}")
             self.logger.success(f"TYPE: {r_type}")
-            self.logger.success(f"{r_type}: {ip}")
+            self.logger.success(f"IP: {ip}")
             self.logger.success(f"RANK: {rank} {rank_v}")
             self.logger.success(f"CREATED: {created}")
             self.logger.success(f"LAST CHANGED: {changed}")
-            self.logger.success(f"TOMBSTONED: {result['dNSTombstoned']}")
+            self.logger.success(f"TOMBSTONED: {tombstoned}")
 
             nt_sec_desc = result["nTSecurityDescriptor"]
             if isinstance(nt_sec_desc, list) and len(nt_sec_desc) > 0:
@@ -252,13 +266,8 @@ class NXCModule:
                 exit(1)
 
     def add_entry(self, context, connection):
-        search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
-        }
 
-        search_base = search_bases[self.zone]
+        search_base = self.get_sbase(connection, self.zone)
         if self.zname == "":
             if self.zone in ["DOMAIN", "LEGACY"]:
                 self.zname = connection.domain
@@ -297,64 +306,23 @@ class NXCModule:
         self.logger.success(f"Record: {record_dn}")
 
         node_data = {
-                "dNSTombstoned": False,
+                "dNSTombstoned": "FALSE",
                 "name": self.record,
                 "dnsRecord": record.getData()
                 }
 
-        # try:
         components = ["top", "dnsNode"]
-        if connection.ldap_connection.add(record_dn, components, attributes=node_data):
-            self.logger.success(f"DNS record {self.record} ({self.data}) added")
-            # req = AddRequest()
-            # req["entry"] = record_dn
-            #
-            # i = 0
-            #
-            # req["attributes"].setComponentByPosition(i)
-            # req["attributes"][i]["type"] = "objectClass"
-            # req["attributes"][i]["vals"].setComponentByPosition(0, "top")
-            # req["attributes"][i]["vals"].setComponentByPosition(1, "dnsNode")
-            # i += 1
-            #
-            # for name, values in node_data.items():
-            #     req["attributes"].setComponentByPosition(i)
-            #     req["attributes"][i]["type"] = name
-            #
-            #     if not isinstance(values, list):
-            #         values = [values]
-            #
-            #     for j, v in enumerate(values):
-            #         if isinstance(v, bytes):
-            #             req["attributes"][i]["vals"].setComponentByPosition(j, v)
-            #         elif isinstance(v, bool):
-            #             req["attributes"][i]["vals"].setComponentByPosition(j, "TRUE" if v else "FALSE")
-            #         else:
-            #             req["attributes"][i]["vals"].setComponentByPosition(j, str(v))
-            #
-            #     i += 1
-            #
-            # resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["addResponse"]
-            # if resp["resultCode"] != ResultCode("success"):
-            #     self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
-            #     self.logger.fail("Use ACTION=PERM to list the correct zone name")
-            # else:
-            #     self.logger.success(f"DNS record {self.record} ({self.data}) added")
-
-        # except Exception as e:
-        #     self.logger.debug(f"Error adding DNS record: {e!s}")
-        #     exit(1)
+        try:
+            if connection.ldap_connection.add(record_dn, components, attributes=node_data):
+                self.logger.success(f"DNS record {self.record} ({self.data}) added")
+        except Exception as e:
+            self.logger.fail(f"Error adding DNS record: {e}")
 
         return
 
     def clear_entry(self, context, connection, tombstone=False, resurrect=False):
-        search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
-        }
 
-        search_base = search_bases[self.zone]
+        search_base = self.get_sbase(connection, self.zone)
 
         if self.zname == "":
             if self.zone in ["DOMAIN", "LEGACY"]:
@@ -393,21 +361,15 @@ class NXCModule:
                 exit(1)
 
             self.logger.success("Performing TOMBSTONE on dnsNode")
-            req = ModifyRequest()
-            req["object"] = dn
 
-            req["changes"].setComponentByPosition(0)
-            req["changes"][0]["operation"] = 2
-            req["changes"][0]["modification"]["type"] = "dNSTombstoned"
-            req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "TRUE")
+            modifications = {"dNSTombstoned": [(2, "TRUE")]}
 
-            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
-
-            if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp["diagnosticMessage"]})
-                exit(1)
-
-            self.logger.success("dnsNode tombstoned")
+            try:
+                if connection.ldap_connection.modify(dn, modifications):
+                    self.logger.success("dnsNode successfully tombstoned")
+            except Exception as e:
+                self.logger.fail("Error while tombstoning DNS entry")
+                self.logger.debug(f"{e}")
 
         elif resurrect:
             if not is_tombstoned:
@@ -415,45 +377,33 @@ class NXCModule:
                 exit(1)
 
             self.logger.success("Trying to RESURRECT dnsNode")
-            req = ModifyRequest()
-            req["object"] = dn
 
-            req["changes"].setComponentByPosition(0)
-            req["changes"][0]["operation"] = 2
-            req["changes"][0]["modification"]["type"] = "dNSTombstoned"
-            req["changes"][0]["modification"]["vals"].setComponentByPosition(0, "FALSE")
+            modifications = {"dNSTombstoned": [(2, "FALSE")]}
 
-            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
-
-            if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()}" - {resp["diagnosticMessage"]})
-                exit(1)
-
-            self.logger.success("dnsNode ressurected")
+            try:
+                if connection.ldap_connection.modify(dn, modifications):
+                    self.logger.success("dnsNode successfully resurrected")
+                else:
+                    self.logger.fail("Failed to resurrect DNS entry")
+            except Exception as e:
+                self.logger.fail("Error while resurrecting DNS entry")
+                self.logger.debug(f"{e}")
 
         else:
             self.logger.success("Performing LDAP DELETE on dnsNode")
 
-            req = DelRequest(dn)
-
-            resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["delResponse"]
-
-            if resp["resultCode"] != ResultCode("success"):
-                self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
-                exit(1)
-
-            self.logger.success(f'DNS record "{self.record}" cleared')
+            try:
+                if connection.ldap_connection.delete(dn):
+                    self.logger.success(f'DNS record "{self.record}" cleared')
+            except Exception:
+                self.logger.fail("Failed to remove DNS entry")
+                self.logger.debug(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
 
         return
 
     def update_entry(self, context, connection):
-        search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"
-        }
 
-        search_base = search_bases[self.zone]
+        search_base = self.get_sbase(connection, self.zone)
 
         if self.zname == "":
             if self.zone in ["DOMAIN", "LEGACY"]:
@@ -472,7 +422,12 @@ class NXCModule:
         result = parse_result_attributes(resp)
 
         if result and len(result) > 0:
-            self.logger.success(f"Found {result[0]['name']} ({socket.inet_ntop(socket.AF_INET, result[0]['dnsRecord'][24:28])})")
+            try:
+                ip = socket.inet_ntop(socket.AF_INET, result[0]["dnsRecord"][24:28])
+            except Exception:
+                ip = "?"
+
+            self.logger.success(f"Found {result[0]['name']} ({ip})")
             self.logger.success(f"{result[0]['distinguishedName']}")
         else:
             self.logger.fail(f"Record {self.record} not found")
@@ -488,21 +443,15 @@ class NXCModule:
         record["Data"] = DNS_RPC_RECORD_A()
         record["Data"]["address"] = socket.inet_aton(self.data)
 
-        req = ModifyRequest()
-        req["object"] = dn
+        modifications = {"dnsRecord": [(2, record.getData())]}
 
-        req["changes"].setComponentByPosition(0)
-        req["changes"][0]["operation"] = 2
-        req["changes"][0]["modification"]["type"] = "dnsRecord"
-        req["changes"][0]["modification"]["vals"].setComponentByPosition(0, record.getData())
-
-        resp = connection.ldap_connection.sendReceive(req)[0]["protocolOp"]["modifyResponse"]
-
-        if resp["resultCode"] != ResultCode("success"):
-            self.logger.fail(f"Error: {resp['resultCode'].prettyPrint()} - {resp['diagnosticMessage']}")
+        try:
+            if connection.ldap_connection.modify(dn, modifications):
+                self.logger.success(f"Successfully updated {self.record}: {self.data}")
+        except Exception as e:
+            self.logger.fail(f"Failed to modify DNS record {result[0]['name']}")
+            self.logger.debug(f"Exception while modifyin entry: {e}")
             exit(1)
-        else:
-            self.logger.success(f"Successfully updated {self.record}: {self.data}")
 
         return
 
@@ -585,12 +534,89 @@ class NXCModule:
 
         return sid_to_name
 
+    def dump(self, context, connection):
+
+        seen_nodes = 0
+        dumped = set()
+        output_file = f"dnsdump_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        search_bases = self.get_sbase(connection, full=True)
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            header = "record_name,record_IP,record_type"
+            f.write(header + "\n")
+            for search_base in search_bases.values():
+                try:
+                    resp = connection.search(
+                            searchFilter="(objectClass=dnsNode)",
+                            attributes=["name", "dnsRecord"],
+                            baseDN=search_base
+                            )
+                    results = parse_result_attributes(resp)
+
+                except Exception as e:
+
+                    self.logger.debug(f"Error during dnsNode ldap search: {e}")
+                    continue
+
+                if not results:
+                    self.logger.debug(f"No dnsNode inside {search_base}")
+                    continue
+
+                for r in results:
+                    if not r:
+                        continue
+
+                    name = r.get("name")
+                    if isinstance(name, list):
+                        name = name[0] if name else None
+                    if not name:
+                        name = "?"
+
+                    dns_records = r.get("dnsRecord")
+
+                    if not dns_records:
+                        continue
+
+                    if not isinstance(dns_records, list):
+                        dns_records = [dns_records]
+
+                    seen_nodes += 1
+
+                    for raw in dns_records:
+                        if not isinstance(raw, (bytes, bytearray)):
+                            continue
+
+                        try:
+                            r_type = "A" if int.from_bytes(raw[2:4], "little") == 1 else "AAAA"
+                        except Exception:
+                            r_type = "?"
+
+                        # Can be removed to dump both A entry and AAAA entry
+                        if r_type == "A":
+                            try:
+                                ip = socket.inet_ntop(socket.AF_INET, raw[24:28])
+                            except Exception:
+                                ip = "?"
+                        elif r_type == "AAAA":
+                            try:
+                                ip = socket.inet_ntop(socket.AF_INET6, raw[24:40])
+                            except Exception:
+                                ip = "?"
+
+                        line = f"{name},{ip},{r_type}"
+                        if line in dumped:
+                            continue
+
+                        dumped.add(line)
+                        f.write(line + "\n")
+
+        self.logger.success(f"Successfully dump {len(dumped)} records to {output_file}")
+        self.logger.success(f'Only ipv4 records: cat {output_file} | grep -v "AAAA"')
+        return
+
     def check_permissions(self, context, connection, perm_all=False):
-        search_bases = {
-            "DOMAIN": f"CN=MicrosoftDNS,DC=DomainDnsZones,{connection.baseDN}",  # 90% use case
-            "FOREST": f"CN=MicrosoftDNS,DC=ForestDnsZones,{connection.forestDN}",  # multi domain
-            "LEGACY": f"CN=MicrosoftDNS,CN=System,{connection.baseDN}"  # old AD
-        }
+
+        search_bases = self.get_sbase(connection, full=True)
 
         for dns_type, search_base in search_bases.items():
             zones = []
@@ -610,7 +636,7 @@ class NXCModule:
             if perm_all:
                 self.logger.display(f"[{dns_type.upper()}]")
             else:
-                w = "zones" if len(zones) > 1 else "zone" 
+                w = "zones" if len(zones) > 1 else "zone"
                 self.logger.success(f"[{dns_type.upper()}] Found {len(zones)} {w}")
             for zone in zones:
                 if zone is None:
@@ -666,7 +692,7 @@ class NXCModule:
 
     def on_login(self, context, connection):
 
-        # self.logger.display(f"{dir(connection.ldap_connection)}")
+        self.action = self.action.upper()
         if self.action == "LIST":
             self.logger.display("Listing available DNS zones")
             self.check_permissions(context, connection)
@@ -692,5 +718,8 @@ class NXCModule:
         elif self.action == "QUERY":
             self.logger.display("Querying DNS entry")
             self.query_entry(context, connection)
+        elif self.action == "DUMP":
+            self.logger.display("Dump all DNS entries")
+            self.dump(context, connection)
 
         return
